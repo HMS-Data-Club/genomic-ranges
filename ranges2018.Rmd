@@ -43,11 +43,17 @@ library(BiocManager)
 install(c("GenomicRanges", "AnnotationHub", "airway", "BiocStyle"))
 ```
 
+![Bed files](fig/range.png)
+
 ## *GRanges*: Genomic Ranges
+
+
 
 ```{r GRanges, echo = FALSE, fig.cap="An illustration of genomic ranges. GRanges represents a set genomic ranges in terms of the sequence name (typically the chromosome), start and end coordinates (as an IRanges object), and strand (either positive, negative, or unstranded). GRanges holds information about its universe of sequences (typically a genome) and an arbitrary set of metadata columns with information particular to the dataset.", out.width="\\textwidth"}
 knitr:::include_graphics("fig/granges.pdf")
 ```
+![GRanges Object](fig/ranges_robj.png)
+
 The central genomic data structure is the *GRanges* class, 
 which represents a collection of genomic ranges
 that each have a single start and end location on the genome. It can be
