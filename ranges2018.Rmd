@@ -1,0 +1,601 @@
+---
+title: "Genomic Ranges"
+output: html_document
+date: "2023-04-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+### What is the Ranges infrastructure?
+
+The Ranges framework of packages provide data structures and
+algorithms for analyzing genomic data. This includes standard genomic
+data containers like GRanges and SummarizedExperiment, optimized data
+representations like Rle, and fast algorithms for computing overlaps,
+finding nearest neighbors, summarizing ranges and metadata, etc.
+
+### Why use the Ranges infrastructure?
+
+Hundreds of Bioconductor packages operate on Ranges data structures,
+enabling the construction of complex workflows integrating multiple
+packages and data types. The API directly supports data analysis as
+well the construction of new genomic software. Code evolves easily
+from analysis script to generalized package extending the Bioconductor
+ecosystem.
+
+### Who is this workshop for?
+
+If you still think of R as a programming language and want to write
+new bioinformatics algorithms and/or build interoperable software on
+top of formal genomic data structures, this workshop is for you. For
+the tidyverse analog of this workshop, see the plyranges tutorial by
+Stuart Lee.
+
+## Setup
+
+```{r, eval=FALSE}
+install.packages("BiocManager")
+library(BiocManager)
+install(c("GenomicRanges", "AnnotationHub", "airway", "BiocStyle"))
+```
+
+## *GRanges*: Genomic Ranges
+
+```{r GRanges, echo = FALSE, fig.cap="An illustration of genomic ranges. GRanges represents a set genomic ranges in terms of the sequence name (typically the chromosome), start and end coordinates (as an IRanges object), and strand (either positive, negative, or unstranded). GRanges holds information about its universe of sequences (typically a genome) and an arbitrary set of metadata columns with information particular to the dataset.", out.width="\\textwidth"}
+knitr:::include_graphics("fig/granges.pdf")
+```
+
+The central genomic data structure is the *GRanges* class, 
+which represents a collection of genomic ranges
+that each have a single start and end location on the genome. It can be
+used to store the location of genomic features such as binding
+sites, read alignments and transcripts. 
+
+## Constructing a *GRanges* object from data.frame
+
+If we have a data.frame containing scores on a set of genomic
+ranges, we can call `makeGRangesFromDataFrame()` to promote the
+data.frame to a GRanges, thus adding semantics, formal constraints,
+and range-specific functionality. For example,
+
+```{r}
+suppressPackageStartupMessages({
+ library(BiocStyle)
+ library(GenomicRanges)
+})
+```
+
+```{r example-GRanges}
+df <- data.frame(
+    seqnames = rep(c("chr1", "chr2", "chr1", "chr3"), c(1, 3, 2, 4)),
+    start = c(101, 105, 125, 132, 134, 152, 153, 160, 166, 170),
+    end = c(104, 120, 133, 132, 155, 154, 159, 166, 171, 190),
+    strand = rep(strand(c("-", "+", "*", "+", "-")), c(1, 2, 2, 3, 2)),
+    score = 1:10,
+    GC = seq(1, 0, length=10),
+    row.names = head(letters, 10))
+gr <- makeGRangesFromDataFrame(df, keep.extra.columns=TRUE)
+```
+
+creates a *GRanges* object with 10 genomic ranges.
+The output of the *GRanges* `show()` method separates the
+information into a left and right hand region that are separated by
+`|` symbols. The genomic coordinates (seqnames, ranges, and strand)
+are located on the left-hand side and the metadata columns (annotation)
+are located on the right. For this example, the metadata is
+comprised of `"score"` and `"GC"` information, but almost
+anything can be stored in the metadata portion of a *GRanges*
+object.
+
+Here is another example where we load in a collection of CpG islands in the human genome described in [Wu et al., 2010](https://doi.org/10.1093/biostatistics/kxq005). 
+
+```{r}
+library(GenomicRanges)
+cpg <- read.delim("http://www.haowulab.org/software/makeCGI/model-based-cpg-islands-hg19.txt")
+cpg <- makeGRangesFromDataFrame(cpg, keep.extra.columns = TRUE)
+genome(cpg) <- "hg19"
+cpg <- sort(cpg)
+cpg
+```
+
+## Loading a *GRanges* object from a standard file format
+
+We often obtain data on genomic ranges from standard track formats,
+like BED, GFF and BigWig. The rtracklayer package parses those files
+directly into GRanges objects. The GenomicAlignments package parses
+BAM files into GAlignments objects, which behave much like GRanges,
+and it is easy to convert a GAlignments to a GRanges. We will see some
+examples of loading data from files later in the tutorial.
+
+The `seqnames()`, `ranges()`, and `strand()` accessor functions
+extract the components of the genomic coordinates,
+ 
+ 
+## Basic manipulation of *GRanges* objects
+
+```{r GRanges-location-accessors}
+seqnames(gr)
+ranges(gr)
+strand(gr)
+```
+
+The `granges()` function extracts genomic ranges without corresponding
+metadata,
+
+```{r granges-accessor}
+granges(gr)
+``` 
+
+The `start()`, `end()`, `width()`, and `range` functions extract basic
+interval characteristics,
+
+```{r IRangesStuff}
+start(gr)
+end(gr)
+width(gr)
+```
+
+The `mcols()` accessor extracts the metadata as a *DataFrame*,
+ 
+```{r metadataAccess}
+mcols(gr)
+mcols(gr)$score
+score(gr)
+```
+
+The lengths and other properties of the sequences containing the
+ranges can (and should) be stored in the *GRanges* object. Formal
+tracking of the sequence universe, typically the genome build, ensures
+data integrity and prevents accidental mixing of ranges from
+incompatible contexts. Assuming these data are of *Homo sapiens*, we
+could add the sequence information like this:
+ 
+```{r setSeqLengths}
+seqinfo(gr) <- Seqinfo(genome="hg38")
+```
+The `Seqinfo()` function automatically loads the sequence information
+for the specified `genome=` by querying the UCSC database.
+ 
+And then retrieves as:
+```{r setSeqLengths2}
+seqinfo(gr)
+```
+ 
+Methods for accessing the `length` and `names` have
+also been defined.
+ 
+```{r names}
+names(gr)
+length(gr)
+```
+
+## Subsetting  *GRanges* objects
+
+*GRanges* objects act like vectors of ranges, with the expected
+vector-like subsetting operations available
+ 
+```{r subset1}
+gr[2:3]
+```
+ 
+A second argument to the `[` subset operator specifies which metadata
+columns to extract from the *GRanges* object. For example,
+ 
+```{r subset2}
+gr[2:3, "GC"]
+```
+
+The `subset()` function provides an easy way to subset based on
+attributes of the ranges and columns in the metadata. For example,
+```{r subset3}
+subset(gr, strand == "+" & score > 5, select = score)
+```
+
+Elements can also be assigned to the *GRanges* object.  This example
+replaces the the second row of a *GRanges* object with the first row
+of `gr`.
+ 
+```{r assign1}
+grMod <- gr
+grMod[2] <- gr[1]
+head(grMod, n=3)
+```
+
+## Basic interval operations for *GRanges* objects
+
+There are many functions for manipulating *GRanges* objects. The
+functions can be classified as *intra-range functions*, *inter-range
+functions*, and *between-range functions*.
+
+*Intra-range functions* operate on each element of a
+*GRanges* object independent of the other ranges in the
+object. For example, the `flank` function can be used to recover
+regions flanking the set of ranges represented by the *GRanges*
+object. So to get a *GRanges* object containing the ranges that
+include the 10 bases upstream according to the direction of
+"transcription" (indicated by the strand):
+ 
+```{r flank}
+g <- gr[1:3]
+g <- append(g, gr[10])
+flank(g, 10)
+```
+
+And to include the downstream bases:
+ 
+```{r flank2}
+flank(g, 10, start=FALSE)
+```
+
+A common use case for `flank()` is generating promoter regions based
+on the transcript ranges. There is a convenience function that by
+default generates a region starting 2000bp upstream and 200bp
+downstream of the TSS,
+
+```{r promoters}
+promoters(g)
+```
+
+To ignore strand/transcription and assume the orientation of left to
+right use `unstrand()`,
+```{r unstrand}
+flank(unstrand(g), 10)
+```
+
+Other examples of intra-range functions include `resize()` and
+`shift()`. The `shift()` function will move the ranges by a specific number
+of base pairs, and the `resize()` function will set a specific width, by
+default fixing the "transcription" start (or just the start when
+strand is "*"). The `fix=` argument controls whether the "start",
+"end" or "center" is held constant.
+ 
+```{r shiftAndResize}
+shift(g, 5)
+resize(g, 30)
+```
+ 
+The `r BiocStyle::Biocpkg("GenomicRanges")` help page `?"intra-range-methods"`
+summarizes these methods.
+
+*Inter-range functions* involve comparisons between ranges in a single
+*GRanges* object and typically aggregate ranges. For instance, the
+`reduce()` function will merge overlapping and adjacent ranges to
+produce a minimal set of ranges representing the regions covered by
+the original set.
+ 
+```{r reduce}
+reduce(gr)
+reduce(gr, ignore.strand=TRUE)
+```
+ 
+Rarely, it useful to complement the (reduced) ranges. Note that the
+universe is taken as the entire sequence span in all three strands (+,
+-, *), which is often surprising when working with unstranded ranges.
+```{r gaps}
+gaps(g)
+```
+ 
+The `disjoin` function breaks up the ranges so that they do not
+overlap but still cover the same regions:
+ 
+```{r disjoin}
+disjoin(g)
+```
+ 
+The `coverage` function counts how many ranges overlap each position
+in the sequence universe of a *GRanges* object.
+ 
+```{r coverage}
+cov <- coverage(g)
+cov[1:3]
+```
+The coverage is stored compactly as an *RleList*, with one *Rle*
+vector per sequence. We can convert it to a *GRanges*.
+```{r coverage_to_gr}
+cov_gr <- GRanges(cov)
+cov_gr
+```
+
+## Finding overlaps between *GRanges* objects
+
+Interval overlapping is the process of comparing the ranges in two
+objects to determine if and when they overlap. As such, it is perhaps
+the most common operation performed on *GRanges* objects. 
+To this end, the `r BiocStyle::Biocpkg("GenomicRanges")`
+package provides a family of interval overlap functions. The most general
+of these functions is `findOverlaps()`, which takes a query and a
+subject as inputs and returns a *Hits* object containing
+the index pairings for the overlapping elements.
+
+Let us assume that we have three random data.frame objects, each with
+annoyingly differing ways of naming the columns defining the ranges,
+```{r reps}
+set.seed(66+105+111+99+49+56)
+
+pos <- sample(1:200, size = 30L)
+size <- 10L
+end <- size + pos - 1L
+chrom <- sample(paste0("chr", 1:3), size = 30L, replace = TRUE)
+query_df <- data.frame(chrom = chrom, 
+                       start = pos,
+                       end = end)
+query_dfs <- split(query_df, 1:3)
+q1 <- rename(query_dfs[[1L]], start = "pos")
+q2 <- rename(query_dfs[[2L]], chrom = "ch", start = "st")
+q3 <- rename(query_dfs[[3L]], end = "last")
+```
+
+The `makeGRangesFromDataFrame()` function can guess some of these, but
+not all of them, so we help it out,
+
+```{r makeGRangesFromDataFrame}
+q1 <- makeGRangesFromDataFrame(q1, start.field = "pos")
+q2 <- makeGRangesFromDataFrame(q2, seqnames.field = "ch",
+                                 start.field = "st")
+q3 <- makeGRangesFromDataFrame(q3, end.field = "last")
+query <- mstack(q1, q2, q3, .index.var="replicate")
+sort(query, by = ~ start)
+```
+Above, we use the convenient `mstack()` function, which stacks its
+arguments, populating the `.index.var=` column with the origin of each
+range (using the argument names or positions).
+
+Perhaps the simplest overlap-based operation is `subsetByOverlaps()`,
+which extracts the elements in the query (the first argument) that
+overlap at least one element in the subject (the second).
+
+```{r subsetByOverlaps}
+subject <- gr
+subsetByOverlaps(query, subject, ignore.strand=TRUE)
+```
+In every call to an overlap operation, it is necessary to specify
+`ignore.strand=TRUE`, except in rare cases when we do not want ranges
+on opposite strands to be considered overlapping.
+
+To generally compute on the overlaps, we call `findOverlaps()` to
+return a `Hits` object, which is essentially a bipartite graph
+matching query ranges to overlapping subject ranges.
+
+```{r findOverlaps}
+hits <- findOverlaps(query, subject, ignore.strand=TRUE)
+```
+
+We typically use the hits to perform one of two operations: join and
+aggregate. For example, we could inner join the scores from the
+subject using the query and subject indexes,
+```{r innerJoin}
+joined <- query[queryHits(hits)]
+joined$score <- subject$score[subjectHits(hits)]
+```
+The above carries over a single metadata column from the
+subject. Similar code would carry over other columns and even the
+ranges themselves. 
+
+Sometimes, we want to merge the matched query and subject ranges,
+typically by finding their intersection,
+```{r overlapIntersect}
+ranges(joined) <- ranges(pintersect(joined, subject[subjectHits(hits)]))
+```
+
+The typical aggregation is counting the number of hits overlapping a
+query. In general, aggregation starts by grouping the subject hits by
+query hits, which we express as a coercion to a *List*,
+```{r hitsAsList}
+hitsByQuery <- as(hits, "List")
+```
+The result is an *IntegerList*, a type of *AtomicList*. *AtomicList*
+objects have many methods for efficient aggregation. In this case, we
+just call `lengths()` to get the count:
+```{r lengthsHits}
+counts <- lengths(hitsByQuery)
+```
+Since this a common operation, there are shortcuts,
+```{r countHits}
+counts <- countQueryHits(hits)
+```
+or even shorter and more efficient,
+```{r countOverlaps}
+counts <- countOverlaps(query, subject, ignore.strand=TRUE)
+unname(counts)
+```
+
+Often, we want to combine joins and aggregations. For example, we may
+want to annotate each query with the maximum score among the subject
+hits,
+```{r joinMax}
+query$maxScore <- max(extractList(subject$score, hitsByQuery))
+subset(query, maxScore > 0)
+```
+
+## Example: exploring BigWig files from AnnotationHub
+
+In the workflow of ChIP-seq data analysis, we are often interested in
+finding peaks from islands of coverage over a chromosome. Here we will
+use plyranges to explore ChiP-seq data from the Human Epigenome
+Roadmap project @Roadmap-Epigenomics-Consortium2015-pr.
+
+### Extracting data from AnnotationHub
+
+This data is available on Bioconductor's AnnotationHub. First we construct
+an AnnotationHub, and then `query()` for all bigWigFiles related to 
+the project that correspond to the following conditions:
+
+1. are from methylation marks (H3K4ME in the title)
+2. correspond to primary T CD8+ memory cells from peripheral blood
+3. correspond to unimputed log10 P-values 
+
+First we construct a hub that contains all references to the EpigenomeRoadMap
+data and extract the metadata as a data.frame:
+
+```{r}
+library(AnnotationHub)
+ah <- AnnotationHub()
+roadmap_hub <- query(ah, "EpigenomeRoadMap") 
+metadata <- query(ah, "Metadata")[[1L]]
+head(metadata)
+```
+
+To find out the name of the sample corresponding to 
+primary memory T-cells we can filter the data.frame. We extract the 
+sample ID corresponding to our filter.
+
+```{r}
+primary_tcells <- subset(metadata,
+                         ANATOMY == "BLOOD" & TYPE == "PrimaryCell" &
+                             EDACC_NAME == "CD8_Memory_Primary_Cells")$EID
+primary_tcells <- as.character(primary_tcells)
+```
+
+Now we can take our roadmap hub and query it based on our other conditions:
+
+```{r}
+methylation_files <-  query(roadmap_hub,
+                            c("BigWig", primary_tcells, "H3K4ME[1-3]",
+                              "pval.signal"))
+methylation_files
+```
+
+So we'll take the first two entries and download them as BigWigFiles:
+
+```{r}
+bw_files <- lapply(methylation_files[1:2], `[[`, 1L)
+```
+
+We have our desired BigWig files so now we can we can start analyzing them.
+
+### Reading BigWig files
+
+For this analysis, we will call peaks from a score vector over
+chromosome 10.
+
+First, we extract the genome information from the first BigWig file and filter
+to get the range for chromosome 10. This range will be used as a filter when 
+reading the file.
+
+```{r}
+chr10_ranges <- Seqinfo(genome="hg19")["chr10"]
+```
+
+Then we read the BigWig file only extracting scores if they overlap chromosome
+10.
+
+```{r}
+library(rtracklayer)
+chr10_scores <- lapply(bw_files, import, which = chr10_ranges,
+                       as = "RleList") 
+chr10_scores[[1]]$chr10
+```
+Each of element of the list is a run-length encoded vector of the
+scores for a particular signal type.
+
+We find the islands by slicing the vectors,
+```{r}
+islands <- lapply(chr10_scores, slice, lower=1L)
+```
+where the islands are represented as *Views* objects, i.e., ranges of
+interest over a genomic vector. Then we find the summit within each
+island,
+```{r}
+summits <- lapply(islands, viewRangeMaxs)
+```
+using the optimized `viewRangeMaxs()` function. Each element of the
+`summits` list is a *RangesList* object, holding the ranges for each
+summit. The structure of the *RangesList* keeps track of the
+chromosome (10) of the summits (there could be multiple chromosomes in
+general). We broaden the summits and reduce them in order to smooth the
+peak calls and provide some context,
+```{r}
+summits <- lapply(lapply(summits, `+`, 50L), reduce)
+```
+
+After this preprocessing, we want to convert the result to a more
+familiar and convenient GRanges object containing an *RleList* "score"
+column containing the score vector for each summit,
+```{r}
+summits_grs <- lapply(summits, GRanges)
+score_grs <- mapply(function(scores, summits) {
+    summits$score <- scores[summits]
+    seqlengths(summits) <- lengths(scores)
+    summits
+}, chr10_scores, summits_grs)
+score_gr <- stack(GenomicRangesList(score_grs), index.var="signal_type")
+```
+One problem with *RangesList* is that it does not keep track of the
+sequence lengths, so we need to add those after forming the *GRanges*.
+
+We could then find summits with the maximum summit height within each
+signal type: 
+```{r}
+score_gr$score_max <- max(score_gr$score)
+chr10_max_score_region <- aggregate(score_gr, score_max ~ signal_type, max)
+```
+
+# Plotting with GViz
+
+```{r}
+library(Gviz)
+
+#This data comes with the GenomicRanges package
+data(cpgIslands)
+class(cpgIslands)
+```
+
+```{r}
+chr <- as.character(unique(seqnames(cpgIslands)))
+gen <- genome(cpgIslands)
+atrack <- AnnotationTrack(cpgIslands, name = "CpG")
+```
+With our first track object being created we may now proceed to the plotting. There is a single function plotTracks that handles all of this, `plotTracks`. `plotTracks` is quite powerful and has a number of very useful additional arguments. For now we will keep things very simple and just plot the single CpG islands annotation track.
+
+```{r}
+plotTracks(atrack)
+```
+As you can see, the resulting graph is not particularly spectacular. There is a title region showing the track’s name on a gray background on the left side of the plot and a data region showing the seven individual CpG islands on the right. This structure is similar for all the available track objects classes and it somewhat mimics the layout of the popular UCSC Genome Browser. 
+
+Apart from the relative distance of the CpG islands, this visualization does not tell us much. One obvious next step would be to indicate the genomic coordinates we are currently looking at in order to provide some reference. For this purpose, the `GenomeAxisTrack` class can be created.
+
+```{r}
+gtrack <- GenomeAxisTrack()
+plotTracks(list(gtrack, atrack))
+```
+
+A plotted track is always defined for exactly one chromosome on a particular genome. We can include this information in our plot by means of a chromosome ideogram. An ideogram is a simplified visual representation of a chromosome, with the different chromosomal staining bands indicated by color, and the centromere (if present) indicated by the shape. The necessary information to produce this visualization is stored in online data repositories, for instance at UCSC.
+
+```{r}
+itrack <- IdeogramTrack(genome = gen, chromosome = chr)
+plotTracks(list(itrack, gtrack, atrack))
+```
+
+So far we have only looked at very basic annotation features and how to give a point of reference to our plots. Naturally, we also want to be able to handle more complex genomic features, such as gene models. The track class of choice here is a `GeneRegionTrack` object.
+
+```{r}
+data(geneModels)
+grtrack <- GeneRegionTrack(geneModels, genome = gen,
+                           chromosome = chr, name = "Gene Model")
+plotTracks(list(itrack, gtrack, atrack, grtrack))
+```
+
+In all those previous examples the plotted genomic range has been determined automatically from the input tracks. Unless told otherwise, the package will always display the region from the leftmost item to the rightmost item in any of the tracks. `plotTracks` supports `from` and `to` arguments that let us choose an arbitrary genomic range to plot.
+
+```{r}
+plotTracks(list(itrack, gtrack, atrack, grtrack),
+           from = 26700000, to = 26750000)
+```
+
+`extend.left` and `extend.right` can zoom out instead:
+
+```{r}
+plotTracks(list(itrack, gtrack, atrack, grtrack),
+           extend.left = 0.5, extend.right = 1000000)
+```
+
+Often individual ranges on a plot tend to grow quite narrow, in particular when zooming far out, and a couple of tweaks become helpful in order to get nice plots, for instance to drop the bounding borders of the exons.
+
+```{r}
+plotTracks(list(itrack, gtrack, atrack, grtrack), 
+           extend.left = 0.5, extend.right = 1000000, col = NULL)
+```
